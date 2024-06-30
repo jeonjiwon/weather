@@ -4,9 +4,18 @@ import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
+import zerobase.weather.WeatherApplication;
+import zerobase.weather.domain.DateWeather;
 import zerobase.weather.domain.Diary;
+import zerobase.weather.error.InvalidDate;
+import zerobase.weather.repository.DateWeatherRepository;
 import zerobase.weather.repository.DiaryRepository;
 
 import java.io.BufferedReader;
@@ -19,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 
 @Service
+@Transactional
 public class DiaryService {
 
     // API 인증키
@@ -27,15 +37,31 @@ public class DiaryService {
 
     final private DiaryRepository diaryRepository;
 
-    public DiaryService(DiaryRepository diaryRepository) {
+    final private DateWeatherRepository dateWeatherRepository;
+
+    final private Logger logger = LoggerFactory.getLogger(WeatherApplication.class);
+
+    public DiaryService(DiaryRepository diaryRepository, DateWeatherRepository dateWeatherRepository) {
         this.diaryRepository = diaryRepository;
+        this.dateWeatherRepository = dateWeatherRepository;
     }
 
+    /**
+     * 새벽 1시마다 날씨 데이터 가져옴
+     */
+    @Transactional
+//    @Scheduled(cron = "0/5 * * * * *") // 5초에 한번
+    @Scheduled(cron = "0 0 1 * * *")
+    public void saveWeatherData(){
+        logger.info("[새벽1시] 날씨 데이터 적재 성공");
+        dateWeatherRepository.save(getWeatherFromApi());
+        
+    }
 
     /**
-     * 날씨 일기 생성
+     * 날씨 일기 생성 - API 호출
      */
-    public void createDiary(LocalDate date, String text){
+    private DateWeather getWeatherFromApi(){
         // 1. open weather map 에서 날씨 데이터 가져오기
         String weatherData = getWeatherString();
         System.out.println(weatherData);
@@ -43,25 +69,69 @@ public class DiaryService {
         // 2. 받아온 날씨 json 파싱하기
         Map<String, Object> parsedWeather = parseWeather(weatherData);
 
-        // 3. 파싱된 데이터 + 일기 데이터 db에 넣기
+        // 3. DateWeather 타입으로 변환하여 반환
+        DateWeather dateWeather = new DateWeather();
+        dateWeather.setDate(LocalDate.now()); // 처리일자
+        dateWeather.setWeather(parsedWeather.get("main").toString());
+        dateWeather.setIcon(parsedWeather.get("icon").toString());
+        dateWeather.setTemperature((double) parsedWeather.get("temp"));
 
+        return dateWeather;
+    }
+
+    /**
+     * 날씨 일기 생성
+     */
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public void createDiary(LocalDate date, String text){
+        logger.info("started to create diary");
+        // 날씨 데이터 가져오기 (api 또는 db)
+        DateWeather dateWeather = getDateWeather(date);
+
+        // 일기데이터 저장
         Diary nowDiary = new Diary();
-        nowDiary.setWeather(parsedWeather.get("main").toString());
-        nowDiary.setIcon(parsedWeather.get("icon").toString());
-        nowDiary.setTemperature((double) parsedWeather.get("temp"));
+        nowDiary.setDateWeather(dateWeather);
         nowDiary.setText(text);
-        nowDiary.setDate(date);
         diaryRepository.save(nowDiary);
+        logger.info("end to create diary");
+
+    }
+
+    /**
+     * 날씨 일기 생성 - API 호출 OR DB에서 조회할지 판단 (캐싱)
+     */
+    private DateWeather getDateWeather(LocalDate date) {
+        List<DateWeather> dateWeatherListFromDB = dateWeatherRepository.findAllByDate(date);
+        if(dateWeatherListFromDB.size() == 0) {
+            // 새로 api에서 날씨 정보를 가져온다
+            System.out.println("새로 api에서 데이터 조회 ");
+            return getWeatherFromApi();
+        } else {
+            System.out.println("있는 데이터라서 디비에서 조회 ");
+            return dateWeatherListFromDB.get(0);
+        }
     }
 
 
     /**
      * 날씨 일기 조회
      */
+    @Transactional(readOnly = true)
     public List<Diary> readDiary(LocalDate date){
+
+
+        logger.debug("read diary");
+//        if(date.isAfter(LocalDate.ofYearDay(3050, 1))) {
+//            throw new InvalidDate();
+//        }
+
         return diaryRepository.findAllByDate(date);
     }
 
+    /**
+     * 날씨 일기 조회 (시작, 종료일 기간으로 조회)
+     */
+    @Transactional(readOnly = true)
     public List<Diary> readDiaries(LocalDate startDate, LocalDate endDate){
         return diaryRepository.findAllByDateBetween(startDate, endDate);
     }

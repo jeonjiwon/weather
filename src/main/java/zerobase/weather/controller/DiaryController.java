@@ -1,5 +1,6 @@
 package zerobase.weather.controller;
 
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.stereotype.Controller;
 import org.springframework.stereotype.Repository;
@@ -19,6 +20,7 @@ public class DiaryController {
         this.diaryService = diaryService;
     }
 
+//    @ApiOperation(value = "일기 텍스트와 날씨를 이용해서 DB에 일기 저장")
     @PostMapping("/create/diary")
     void createDiary(
             @RequestParam("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
